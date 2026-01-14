@@ -18,7 +18,7 @@
 
 ## Структура проекта
 
-- `scripts/roles_index.faiss` – FAISS индекс
+- `scripts/roles_index.faiss` – FAISS индекс (предварительная реализация)
 - `backend/app.py` – основной бэкенд FastAPI
 - `frontend/app.py` – интерфейс Streamlit
 
@@ -31,7 +31,7 @@
    ```bash
    fastapi run backend/app.py
 
-2. **Streamlit фронтенд**
+2. **Streamlit фронтенд**  
    В отдельном терминале:
    ```bash
    streamlit run frontend/app.py
