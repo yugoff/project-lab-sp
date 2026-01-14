@@ -1,37 +1,64 @@
 from fastapi import APIRouter
-from schemas.schema_chat import ChatRequest, ChatResponse
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import faiss
-from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
+import faiss
+import numpy as np
+import json
+
+from schemas.schema_chat import ChatRequest, ChatResponse
 
 
 router = APIRouter()
-dataset = load_dataset("wikipedia", "20220301.en", split="train[:1000]")
-documents = [item["text"] for item in dataset]
-# model_name = "Qwen/Qwen2.5-3B-Instruct"
-embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-document_embeddings = embed_model.encode(documents, normalize_embeddings=True)
-model_name = "Qwen/Qwen3-0.6B"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
+index = faiss.read_index("scripts/roles_index.faiss")
+with open("scripts/dataset.json", "r", encoding="utf-8") as f:
+    dataset = json.load(f)
 
-dimension = document_embeddings.shape[1]
-index = faiss.IndexFlatIP(dimension)
-index.add(document_embeddings)
-
-def get_context(query: str, k: int = 5):
-    query_vector = embed_model.encode([query], normalize_embeddings=True)
-    D, I = index.search(query_vector, k)
-    return "\n".join([documents[i] for i in I[0]])
+model_emb = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+model_tg = "Qwen/Qwen3-0.6B"
+tokenizer = AutoTokenizer.from_pretrained(model_tg)
+model = AutoModelForCausalLM.from_pretrained(model_tg, device_map="auto")
 
 
-def generate_answer(query: str, mode: str, language: str, max_length: int = 256):
-    prompt = f"Ты {mode} ассистент. Отвечай на вопрос на языке {language}:\n{get_context(query)}"
+def get_context(query: str, role: str, k: int = 2):
+    query_emb = model_emb.encode([query], convert_to_tensor=True)
+    query_emb_np = np.array(query_emb.cpu()).astype("float32")
+    faiss.normalize_L2(query_emb_np)
+
+    scores, ids = index.search(query_emb_np, k)
+    results = []
+
+    for idx, score in zip(ids[0], scores[0]):
+        doc = dataset[idx]
+        if doc["role"].lower() == role.lower():
+            results.append(doc["text"])
+        if len(results) >= k:
+            break
+
+    return results
+
+
+def generate_answer(query: str, role: str, language: str = "ru", max_length: int = 256):
+    context = get_context(query, role)
+    context_text = "\n".join(context) if context else "Информация отсутствует."
+
+    prompt = (
+        f"Ты корпоративный {role} ассистент.\n"
+        f"Используй только информацию из контекста ниже.\n"
+        f"Контекст:\n{context_text}\n\n"
+        f"Вопрос: {query}\n"
+        f"Ответ на языке {language}:"
+    )
+
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    output = model.generate(**inputs, max_new_tokens=max_length)
-    answer = tokenizer.decode(output[0], skip_special_tokens=True)
-    return answer
+
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=max_length,
+        do_sample=True,
+        temperature=0.7
+    )
+
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 
 @router.post("/chat", response_model=ChatResponse)
