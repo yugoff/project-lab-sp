@@ -1,13 +1,9 @@
 import streamlit as st
 import requests
 
-
 st.title("RAG Ассистент")
 
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if st.button("Доступ к сервису?"):
+if st.button("Доступ к сервису"):
     try:
         r = requests.get("http://127.0.0.1:8000/health")
         if r.status_code == 200:
@@ -22,17 +18,17 @@ language = st.selectbox("Язык", ["ru", "en"])
 query = st.text_input("Ваш вопрос:")
 
 if st.button("Отправить") and query:
-    payload = {"query": query, "mode": operator, "language": language}
+    payload = {
+        "query": query,
+        "mode": operator,
+        "language": language
+    }
     try:
         r = requests.post("http://127.0.0.1:8000/chat", json=payload)
         data = r.json()
-        st.session_state.history.append(("Вы", query))
-        st.session_state.history.append(("Бот", data["answer"]))
+
+        st.markdown(f"Вы: {query}")
+        st.markdown(f"Бот: {data['answer']}")
+
     except Exception as e:
         st.error(f"Ошибка запроса: {e}")
-
-for speaker, text in st.session_state.history:
-    if speaker == "Вы":
-        st.markdown(f"**{speaker}:** {text}")
-    else:
-        st.markdown(f"**{speaker}:** {text}")

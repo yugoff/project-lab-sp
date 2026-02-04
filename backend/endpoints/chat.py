@@ -37,7 +37,7 @@ def get_context(query: str, role: str, k: int = 2):
     return results
 
 
-def generate_answer(query: str, role: str, language: str = "ru", max_length: int = 256):
+def generate_answer(query: str, role: str, language: str = "ru", max_length: int = 36):
     context = get_context(query, role)
     context_text = "\n".join(context) if context else "Информация отсутствует."
 
@@ -58,7 +58,10 @@ def generate_answer(query: str, role: str, language: str = "ru", max_length: int
         temperature=0.7
     )
 
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+    generated_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
+    answer = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+    return answer.strip()
 
 
 @router.post("/chat", response_model=ChatResponse)
