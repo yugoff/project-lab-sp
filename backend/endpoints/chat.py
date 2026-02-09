@@ -1,52 +1,64 @@
+import json
+from pathlib import Path
+
 from fastapi import APIRouter
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from sentence_transformers import SentenceTransformer
 import faiss
-import numpy as np
-import json
 
 from schemas.schema_chat import ChatRequest, ChatResponse
 
 
+BASE_DIR = Path(__file__).resolve().parents[2]
 router = APIRouter()
-index = faiss.read_index("scripts/roles_index.faiss")
-with open("scripts/dataset.json", "r", encoding="utf-8") as f:
+index = faiss.read_index(str(BASE_DIR / "scripts" / "full_directory" / "vector.index"))
+with open(BASE_DIR / "scripts" / "full_directory" / "meta_data.json", "r", encoding="utf-8") as f:
     dataset = json.load(f)
 
-model_emb = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-model_tg = "Qwen/Qwen3-0.6B"
+model_emb = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
+model_tg = "Qwen/Qwen2.5-3B-Instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_tg)
-model = AutoModelForCausalLM.from_pretrained(model_tg, device_map="auto")
+model = AutoModelForCausalLM.from_pretrained(model_tg, device_map="cpu")
 
 
-def get_context(query: str, role: str, k: int = 2):
-    query_emb = model_emb.encode([query], convert_to_tensor=True)
-    query_emb_np = np.array(query_emb.cpu()).astype("float32")
-    faiss.normalize_L2(query_emb_np)
-
+def get_id_in_bd(query: str, k: int = 2):
+    query_emb_np = model_emb.encode(
+        [query],
+        convert_to_numpy=True,
+        normalize_embeddings=False
+    ).astype("float32")
     scores, ids = index.search(query_emb_np, k)
-    results = []
 
-    for idx, score in zip(ids[0], scores[0]):
-        doc = dataset[idx]
-        if doc["role"].lower() == role.lower():
-            results.append(doc["text"])
-        if len(results) >= k:
-            break
-
-    return results
+    return ids
 
 
-def generate_answer(query: str, role: str, language: str = "ru", max_length: int = 36):
-    context = get_context(query, role)
+def get_path(ids):
+    with open(BASE_DIR / "scripts" / "full_directory" / "meta_data.json", "r", encoding="utf-8") as f:
+        path = json.load(f)
+
+        return path[ids[0][0]]["path"]
+
+
+def get_context(ids):
+    with open(BASE_DIR / "scripts" / "full_directory" / "meta_data.json", "r", encoding="utf-8") as f:
+        context = json.load(f)
+
+        return context[ids[0][0]]["text"]
+
+
+def generate_answer(query: str, role: str, language: str = "ru", max_length: int = 512):
+    id = get_id_in_bd(query)
+    path = get_path(id)
+    context = get_context(id)
     context_text = "\n".join(context) if context else "Информация отсутствует."
 
     prompt = (
         f"Ты корпоративный {role} ассистент.\n"
-        f"Используй только информацию из контекста ниже.\n"
+        f"Дай краткую сводку по контексту, ответь на вопрос.\n"
         f"Контекст:\n{context_text}\n\n"
         f"Вопрос: {query}\n"
-        f"Ответ на языке {language}:"
+        f"Ответ на языке только {language}:"
+        f"Обязательно пропиши путь к файлу: {path}"
     )
 
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
@@ -55,7 +67,9 @@ def generate_answer(query: str, role: str, language: str = "ru", max_length: int
         **inputs,
         max_new_tokens=max_length,
         do_sample=True,
-        temperature=0.7
+        temperature=0.7,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.eos_token_id
     )
 
     generated_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
